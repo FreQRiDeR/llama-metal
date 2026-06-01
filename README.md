@@ -1,7 +1,7 @@
 # llama-metal
 
 <div align="center">
-      <img src="/window1.png" width="600" />             
+      <img src="/window1.png" width="900" />             
 
 </div>
 
