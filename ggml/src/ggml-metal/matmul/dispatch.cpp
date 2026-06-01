@@ -128,16 +128,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                 r1ptg = 4; break;
         };
 
-        // Intel's simd_shuffle_down produces wrong results at NW<32.
-        // The ext kernel uses shuffle_down for reduction; enable shmem path on Intel.
-        // (The scalar mul_mv path uses simd_sum which works correctly at NW=16.)
-        const bool use_shmem_reduce_ext = (profile->vendor == GGML_GPU_VENDOR_INTEL);
+        // Intel's simd_shuffle_down produces wrong results at NW<32, and AMD
+        // GCN/Polaris can corrupt simd reductions under Metal. Use the explicit
+        // threadgroup-memory reduction path on those vendors.
+        const bool use_shmem_reduce_ext =
+            profile->vendor == GGML_GPU_VENDOR_AMD ||
+            profile->vendor == GGML_GPU_VENDOR_INTEL;
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, nsg, nxpsg, r1ptg, use_shmem_reduce_ext);
 
         // Compute nypsg and r0ptg AFTER pipeline compilation using the actual SIMD width.
         // The adaptive recompile may change FC_SIMD_WIDTH (e.g., Intel: 32→16 or 32→8).
-        const int ext_simd_w =
-            (pipeline.pipeline ? ggml_metal_pipeline_thread_execution_width(pipeline) : 32);
+        const int ext_simd_w = use_shmem_reduce_ext
+            ? ggml_metal_library_get_simd_width(lib)
+            : (pipeline.pipeline ? ggml_metal_pipeline_thread_execution_width(pipeline) : 32);
         const int16_t nypsg  = ext_simd_w/nxpsg;  // num threads along col per simdgroup
         const int16_t r0ptg  = nypsg*nsg;          // num src0 rows per threadgroup
 
@@ -385,7 +388,9 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     }
 
     if (!dispatched) {
-        const bool use_shmem_reduce = false;
+        const bool use_shmem_reduce =
+            profile->vendor == GGML_GPU_VENDOR_AMD ||
+            profile->vendor == GGML_GPU_VENDOR_INTEL;
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op, use_shmem_reduce);
 
         // mul_mv is the last resort — if it's not verified for this vendor, crash
@@ -402,9 +407,11 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
         const int nsg = pipeline.nsg;
-        // When shmem_reduce is active, dispatch with logical width (32) not actual hw width.
-        // shmem_reduce virtualizes 32-wide groups via tidx%32 regardless of actual SIMD width.
-        const int mv_simd_w = ggml_metal_pipeline_thread_execution_width(pipeline);
+        // When shmem_reduce is active, dispatch with the logical width used by
+        // FC_SIMD_WIDTH, not necessarily the pipeline's physical wave width.
+        const int mv_simd_w = use_shmem_reduce
+            ? ggml_metal_library_get_simd_width(lib)
+            : ggml_metal_pipeline_thread_execution_width(pipeline);
 
         const size_t smem = pipeline.smem;
 
@@ -633,13 +640,17 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne21 + 31)/32, (ne01 + 63)/64, ne02, 128, 1, 1);
         }
     } else {
-        const bool use_shmem_reduce_id = false;
+        const bool use_shmem_reduce_id =
+            profile->vendor == GGML_GPU_VENDOR_AMD ||
+            profile->vendor == GGML_GPU_VENDOR_INTEL;
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_id(lib, op, use_shmem_reduce_id);
 
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
         const int nsg = pipeline.nsg;
-        const int id_simd_w = ggml_metal_pipeline_thread_execution_width(pipeline);
+        const int id_simd_w = use_shmem_reduce_id
+            ? ggml_metal_library_get_simd_width(lib)
+            : ggml_metal_pipeline_thread_execution_width(pipeline);
 
         const size_t smem = pipeline.smem;
 

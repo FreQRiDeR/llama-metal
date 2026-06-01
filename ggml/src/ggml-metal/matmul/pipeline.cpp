@@ -560,7 +560,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
     res.nr0  = nr0;
     res.nr1  = nr1;
     res.nsg  = nsg;
-    res.smem = use_shmem_reduce ? std::max(smem, (size_t)(nsg * pw_id * sizeof(float))) : smem;
+    res.smem = use_shmem_reduce ? std::max(smem, (size_t)(nsg * pw_id * nr0 * sizeof(float))) : smem;
 
     return res;
 }

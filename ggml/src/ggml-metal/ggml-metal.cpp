@@ -893,10 +893,15 @@ static ggml_backend_reg_i ggml_backend_metal_reg_i = {
 };
 
 static ggml_backend_dev_t ggml_backend_metal_device_init(ggml_backend_reg_t reg, int device) {
+    ggml_metal_device_t ctx_dev = ggml_metal_device_get(device);
+    if (ctx_dev == nullptr) {
+        return nullptr;
+    }
+
     return new ggml_backend_device {
         /* .iface   = */ ggml_backend_metal_device_i,
         /* .reg     = */ reg,
-        /* .context = */ ggml_metal_device_get(device),
+        /* .context = */ ctx_dev,
     };
 }
 
@@ -932,6 +937,9 @@ ggml_backend_reg_t ggml_backend_metal_reg(void) {
 
             for (int i = 0; i < g_devices; ++i) {
                 auto * dev = ggml_backend_metal_device_init(&reg, i);
+                if (dev == nullptr) {
+                    continue;
+                }
                 devs.emplace_back(dev);
 
                 reg_ctx->devices.push_back(dev);

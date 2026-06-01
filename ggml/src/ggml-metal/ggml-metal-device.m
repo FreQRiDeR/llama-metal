@@ -512,11 +512,11 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 
             const int actual_width = (int) obj.threadExecutionWidth;
 
-            if (actual_width != simd_w && attempt == 0) {
+            if (actual_width > 0 && actual_width < simd_w && attempt == 0) {
                 // Pipeline compiled to a different SIMD width than expected.
-                // Recompile with the actual value so NW matches the hardware.
-                // Upward (Vega 64>32) or downward (Intel 16<32) — kernel inner
-                // loops handle variable NW via chunks_per_thread iteration.
+                // Recompile downward so NW matches lower-width Intel kernels.
+                // Do not recompile upward: several matvec kernels use a 32-lane
+                // logical decomposition even on AMD wave64 hardware.
                 GGML_LOG_DEBUG("%s: %-40s simd mismatch: expected %d, got %d — recompiling\n",
                         __func__, name, (int)simd_w, actual_width);
                 [obj release];
@@ -751,19 +751,23 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
 
             // Build ordered list: default device first, then others
             NSMutableArray<id<MTLDevice>> *ordered = [NSMutableArray arrayWithCapacity:allDevices.count];
-            [ordered addObject:defaultDevice];
+            if (defaultDevice != nil) {
+                [ordered addObject:defaultDevice];
+            }
             for (id<MTLDevice> d in allDevices) {
-                if (d.registryID != defaultDevice.registryID) {
+                if (defaultDevice == nil || d.registryID != defaultDevice.registryID) {
                     [ordered addObject:d];
                 }
             }
 
             if (device < (int)ordered.count) {
                 dev->mtl_device = [ordered[device] retain];
-            } else {
-                GGML_LOG_WARN("%s: device index %d out of range (%d devices), using default\n",
+            } else if (ordered.count > 0) {
+                GGML_LOG_WARN("%s: device index %d out of range (%d devices), using device 0\n",
                     __func__, device, (int)ordered.count);
-                dev->mtl_device = [defaultDevice retain];
+                dev->mtl_device = [ordered[0] retain];
+            } else {
+                GGML_LOG_ERROR("%s: error: no Metal devices found\n", __func__);
             }
 
             [allDevices release];
@@ -985,9 +989,14 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                 if (probe.pipeline) {
                     const int tw = ggml_metal_pipeline_thread_execution_width(probe);
                     if (tw > 0) {
-                        dev->profile.simd_width  = (uint32_t) tw;
-                        dev->library->simd_width = tw;
-                        GGML_LOG_INFO("%s: probed simd_width = %d\n", __func__, tw);
+                        const int logical_tw = (dev->profile.vendor == GGML_GPU_VENDOR_AMD && tw > 32) ? 32 : tw;
+                        dev->profile.simd_width  = (uint32_t) logical_tw;
+                        dev->library->simd_width = logical_tw;
+                        if (logical_tw != tw) {
+                            GGML_LOG_INFO("%s: probed simd_width = %d, using logical simd_width = %d\n", __func__, tw, logical_tw);
+                        } else {
+                            GGML_LOG_INFO("%s: probed simd_width = %d\n", __func__, tw);
+                        }
                     }
                 }
             }
@@ -1084,6 +1093,11 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             }
 #endif
         }
+    }
+
+    if (dev->mtl_device == nil) {
+        free(dev);
+        return nil;
     }
 
     return dev;
@@ -1225,6 +1239,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
     const bool has_simdgroup_mm        = dev->profile.has_matrix_hw;
     const bool has_simdgroup_reduction = dev->profile.has_simd_reduction;
     const bool has_bfloat              = dev->props.has_bfloat;
+    const bool is_amd                  = dev->profile.vendor == GGML_GPU_VENDOR_AMD;
 
     if (!has_bfloat) {
         if (op->type == GGML_TYPE_BF16) {
@@ -1306,6 +1321,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->type == GGML_TYPE_F32;
         case GGML_OP_SUM:
+            if (is_amd) {
+                return false;
+            }
             return has_simdgroup_reduction && ggml_is_contiguous(op->src[0]);
         case GGML_OP_TRI:
             return ggml_is_contiguous_rows(op->src[0]);
@@ -1315,16 +1333,28 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOFT_MAX:
         case GGML_OP_GROUP_NORM:
         case GGML_OP_L2_NORM:
+            if (is_amd) {
+                return false;
+            }
             return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_COUNT_EQUAL:
+            if (is_amd) {
+                return false;
+            }
             return has_simdgroup_reduction &&
                 op->src[0]->type == GGML_TYPE_I32 &&
                 op->src[1]->type == GGML_TYPE_I32 &&
                 op->type == GGML_TYPE_I64;
         case GGML_OP_ARGMAX:
+            if (is_amd) {
+                return false;
+            }
             return has_simdgroup_reduction;
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
+            if (is_amd) {
+                return false;
+            }
             return has_simdgroup_reduction && (ggml_is_contiguous_rows(op->src[0]));
         case GGML_OP_ROPE:
             return true;
@@ -1360,6 +1390,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ARANGE:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
+            if (is_amd) {
+                return false;
+            }
             // for new head sizes, add checks here
             if (op->src[0]->ne[0] != 32 &&
                 op->src[0]->ne[0] != 40 &&
@@ -1414,6 +1447,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return false;
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
+            if (is_amd) {
+                return false;
+            }
             return has_simdgroup_reduction;
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_RWKV_WKV7:
