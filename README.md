@@ -1,5 +1,10 @@
 # llama-metal
 
+<div align="center">
+      <img src="https://github.com/FreQRiDeR/llama-metal/window1.png" width="600" />             
+
+</div>
+
 Metal GPU backend fixes for [llama.cpp](https://github.com/ggml-org/llama.cpp) on non-Apple-Silicon hardware.
 
 ## What This Is
