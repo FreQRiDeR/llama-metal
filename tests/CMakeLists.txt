@@ -275,7 +275,7 @@ if (GGML_METAL AND APPLE)
     add_executable(test-metal-kernels test-norm.mm)
     target_include_directories(test-metal-kernels PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
     target_compile_definitions(test-metal-kernels PRIVATE
-        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels/norm.metal"
+        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/norm/norm.metal"
         KERNEL_DIR="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels"
     )
     target_link_libraries(test-metal-kernels PRIVATE
@@ -294,7 +294,7 @@ if (GGML_METAL AND APPLE)
     add_executable(test-softmax test-softmax.mm)
     target_include_directories(test-softmax PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
     target_compile_definitions(test-softmax PRIVATE
-        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels/softmax.metal"
+        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/softmax/softmax.metal"
         KERNEL_DIR="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels"
     )
     target_link_libraries(test-softmax PRIVATE
@@ -313,7 +313,7 @@ if (GGML_METAL AND APPLE)
     add_executable(test-rope-metal test-rope.mm)
     target_include_directories(test-rope-metal PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
     target_compile_definitions(test-rope-metal PRIVATE
-        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels/rope.metal"
+        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/rope/rope.metal"
         KERNEL_DIR="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels"
     )
     target_link_libraries(test-rope-metal PRIVATE
@@ -332,7 +332,7 @@ if (GGML_METAL AND APPLE)
     add_executable(test-reduction test-reduction.mm)
     target_include_directories(test-reduction PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
     target_compile_definitions(test-reduction PRIVATE
-        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels/reduction.metal"
+        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/reduction/reduction.metal"
         KERNEL_DIR="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels"
     )
     target_link_libraries(test-reduction PRIVATE
@@ -351,7 +351,7 @@ if (GGML_METAL AND APPLE)
     add_executable(test-unary test-unary.mm)
     target_include_directories(test-unary PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
     target_compile_definitions(test-unary PRIVATE
-        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels/unary-binary.metal"
+        KERNEL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/unary/unary-binary.metal"
         KERNEL_DIR="${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal/kernels"
     )
     target_link_libraries(test-unary PRIVATE

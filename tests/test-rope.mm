@@ -186,6 +186,7 @@ public:
 
         // Compile with function constant for non-imrope mode
         MTLCompileOptions* options = [MTLCompileOptions new];
+        options.fastMathEnabled = NO;
         library = [device newLibraryWithSource:combined_src options:options error:&error];
         [options release];
 

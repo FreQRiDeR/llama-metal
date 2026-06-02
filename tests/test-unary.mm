@@ -187,7 +187,7 @@ public:
         }
 
         // Read unary-binary.metal
-        NSString* unary_path = [kernel_dir stringByAppendingPathComponent:@"unary-binary.metal"];
+        NSString* unary_path = [NSString stringWithUTF8String:KERNEL_SOURCE_PATH];
         NSString* unary_src = [NSString stringWithContentsOfFile:unary_path
                                                          encoding:NSUTF8StringEncoding
                                                             error:&error];

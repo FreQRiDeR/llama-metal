@@ -709,7 +709,20 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
+    const struct ggml_device_profile * profile = ggml_metal_device_get_profile(ctx_dev);
+
+    int n_cb = 1;
+    const char * env_n_cb = getenv("GGML_METAL_N_CB");
+    if (env_n_cb != NULL) {
+        n_cb = atoi(env_n_cb);
+        if (n_cb < 0) n_cb = 0;
+        if (n_cb > 8) n_cb = 8;
+    } else if (!profile->shared_memory && !props_dev->is_low_power) {
+        n_cb = 2;
+    }
+
+    ggml_backend_metal_set_n_cb(backend, n_cb);
 
     return backend;
 

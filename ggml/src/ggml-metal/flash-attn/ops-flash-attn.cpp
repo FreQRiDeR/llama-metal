@@ -4,10 +4,9 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     const int64_t ne00 = op->src[0]->ne[0]; // head size
-    const int64_t ne01 = op->src[0]->ne[1]; // batch size
 
-    // use vec kernel if the batch size is small and if the head size is supported
-    return (ne01 < 20) && (ne00 % 32 == 0);
+    // use vec kernel for supported head sizes by default
+    return (ne00 % 32 == 0);
 }
 
 size_t ggml_metal_op_flash_attn_ext_extra_pad(const ggml_tensor * op) {
@@ -25,32 +24,18 @@ size_t ggml_metal_op_flash_attn_ext_extra_pad(const ggml_tensor * op) {
     size_t res = 0;
 
     const bool has_mask = op->src[3] != nullptr;
+    const bool is_vec = ggml_metal_op_flash_attn_ext_use_vec(op);
 
-    // note: the non-vec kernel requires more extra memory, so always reserve for it
     GGML_ASSERT(OP_FLASH_ATTN_EXT_NCPSG >= OP_FLASH_ATTN_EXT_VEC_NCPSG);
 
-    //if (ggml_metal_op_flash_attn_ext_use_vec(op)) {
-    if (false) {
-        // note: always reserve the padding space to avoid graph reallocations
-        //const bool has_kvpad = ne11 % OP_FLASH_ATTN_EXT_VEC_NCPSG != 0;
-        const bool has_kvpad = true;
+    const int ncpsg = is_vec ? OP_FLASH_ATTN_EXT_VEC_NCPSG : OP_FLASH_ATTN_EXT_NCPSG;
+    const bool has_kvpad = true;
 
-        if (has_kvpad) {
-            res += OP_FLASH_ATTN_EXT_VEC_NCPSG*(
-                nb11*ne12*ne13 +
-                nb21*ne22*ne23 +
-                (has_mask ? ggml_type_size(GGML_TYPE_F16)*ne31*ne32*ne33 : 0));
-        }
-    } else {
-        //const bool has_kvpad = ne11 % OP_FLASH_ATTN_EXT_NCPSG != 0;
-        const bool has_kvpad = true;
-
-        if (has_kvpad) {
-            res += OP_FLASH_ATTN_EXT_NCPSG*(
-                nb11*ne12*ne13 +
-                nb21*ne22*ne23 +
-                (has_mask ? ggml_type_size(GGML_TYPE_F16)*ne31*ne32*ne33 : 0));
-        }
+    if (has_kvpad) {
+        res += ncpsg*(
+            nb11*ne12*ne13 +
+            nb21*ne22*ne23 +
+            (has_mask ? ggml_type_size(GGML_TYPE_F16)*ne31*ne32*ne33 : 0));
     }
 
     return res;
@@ -108,10 +93,9 @@ size_t ggml_metal_op_flash_attn_ext_extra_tmp(const ggml_tensor * op) {
   //GGML_TENSOR_LOCALS(uint64_t, nb3, op->src[3], nb);
 
     size_t res = 0;
+    const bool is_vec = ggml_metal_op_flash_attn_ext_use_vec(op);
 
-    // note: always reserve the temp buffer to avoid graph reallocations
-    //if (ggml_metal_op_flash_attn_ext_use_vec(op)) {
-    if (true) {
+    if (is_vec) {
         const int64_t nwg = 32;
         const int64_t ne01_max = std::min(ne01, 32);
 
@@ -319,11 +303,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     }
 
     // SCALAR fallback for GPUs without simdgroup matrix multiply support
-    // Route ALL batch sizes through scalar on Intel — vec kernel compiles to
+    // Route ALL work through scalar on Intel — vec kernel compiles to
     // th_width=16 on Intel iGPU (register pressure) but assumes th_width=32 (BUG-005)
-    // Route ALL batch sizes through scalar on AMD GCN/Vega (simd_width=64) — vec kernel
+    // Route ALL work through scalar on AMD GCN/Vega (simd_width=64) — vec kernel
     // hardcodes NW=32 and breaks on 64-wide SIMD (threads 32-63 get uninitialized data)
-    // For AMD RDNA (simd_width=32), use vec for small batch (ne01 < 20) as designed
+    // For AMD RDNA (simd_width=32), use vec for supported head sizes by default.
     const bool use_scalar = !profile->has_matrix_hw &&
         (profile->vendor == GGML_GPU_VENDOR_INTEL || profile->simd_width != 32 || !ggml_metal_op_flash_attn_ext_use_vec(op));
     if (use_scalar) {

@@ -131,13 +131,22 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-    res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
-    res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+    res->use_fusion = getenv("GGML_METAL_FUSION_DISABLE") == nil;
 
-    // MTLDispatchTypeConcurrent causes NaN on discrete (non-UMA) GPUs like AMD Radeon
+    if (getenv("GGML_METAL_CONCURRENCY_ENABLE") != NULL) {
+        res->use_concurrency = true;
+    } else {
+        res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+    }
+
+    // MTLDispatchTypeConcurrent can be unsafe on discrete (non-UMA) GPUs like AMD Radeon
     if (res->use_concurrency && !profile->shared_memory) {
-        GGML_LOG_WARN("%s: disabling concurrent dispatch (not supported on non-UMA devices)\n", __func__);
-        res->use_concurrency = false;
+        if (getenv("GGML_METAL_CONCURRENCY_ENABLE") != NULL) {
+            GGML_LOG_WARN("%s: forcing concurrent dispatch on non-UMA device (unstable on some discrete GPUs)\n", __func__);
+        } else {
+            GGML_LOG_WARN("%s: disabling concurrent dispatch (not supported on non-UMA devices)\n", __func__);
+            res->use_concurrency = false;
+        }
     }
 
     {

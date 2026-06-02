@@ -65,7 +65,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     bool dispatched = false;
 
     // first try to use small-batch mat-mv kernels
-    // these should be efficient for BS [2, ~8]
+    // these should be efficient for BS [1, ~8]
     if (!dispatched && op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
         (
          (
@@ -79,14 +79,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q8_0 ||
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
-           false) && (ne11 >= 2 && (ne11 <= ne11_mm_min || (!profile->has_matrix_hw && op->src[0]->type != GGML_TYPE_F16 && op->src[0]->type != GGML_TYPE_MXFP4)))
+           false) && (ne11 >= 1 && (ne11 <= ne11_mm_min || (!profile->has_matrix_hw && op->src[0]->type != GGML_TYPE_F16 && op->src[0]->type != GGML_TYPE_MXFP4)))
          ) ||
          (
           (
            op->src[0]->type == GGML_TYPE_Q4_K ||
            op->src[0]->type == GGML_TYPE_Q5_K ||
            op->src[0]->type == GGML_TYPE_Q6_K ||
-           false) && (ne11 >= 4 && (ne11 <= 8 || !profile->has_matrix_hw))
+           false) && (ne11 >= 1 && (ne11 <= 8 || !profile->has_matrix_hw))
          )
         )
        ) {
@@ -98,11 +98,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //       my current hypothesis is that the work grid is not evenly divisible for different nsg
         //       values and there can be some tail effects when nsg is high. need to confirm this
         //
-        const int nsg    = 2;                 // num simdgroups per threadgroup
+        const int simd_w = ggml_metal_library_get_simd_width(lib);
+        const int max_nsg = MAX(2, MIN(8, (int)profile->max_threads_per_threadgroup / simd_w));
+
+        int nsg = 2;                         // num simdgroups per threadgroup
+        if (ne11 >= 8 && max_nsg >= 8) {
+            nsg = 8;
+        } else if (ne11 >= 4 && max_nsg >= 4) {
+            nsg = 4;
+        }
 
         // num threads along row per simdgroup
         int16_t nxpsg = 0;
-        if (ne00 % 256 == 0 && ne11 < 3) {
+        if (ne00 % 256 == 0 && ne11 < 4) {
             nxpsg = 16;
         } else if (ne00 % 128 == 0) {
             nxpsg = 8;
@@ -113,6 +121,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         int16_t r1ptg  = 4;                 // num src1 rows per threadgroup
 
         switch (ne11) {
+            case 1:
             case 2:
                 r1ptg = 2; break;
             case 3:
@@ -134,26 +143,42 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const bool use_shmem_reduce_ext =
             profile->vendor == GGML_GPU_VENDOR_AMD ||
             profile->vendor == GGML_GPU_VENDOR_INTEL;
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, nsg, nxpsg, r1ptg, use_shmem_reduce_ext);
 
-        // Compute nypsg and r0ptg AFTER pipeline compilation using the actual SIMD width.
-        // The adaptive recompile may change FC_SIMD_WIDTH (e.g., Intel: 32→16 or 32→8).
-        const int ext_simd_w = use_shmem_reduce_ext
-            ? ggml_metal_library_get_simd_width(lib)
-            : (pipeline.pipeline ? ggml_metal_pipeline_thread_execution_width(pipeline) : 32);
-        const int16_t nypsg  = ext_simd_w/nxpsg;  // num threads along col per simdgroup
-        const int16_t r0ptg  = nypsg*nsg;          // num src0 rows per threadgroup
+        const int candidate_nsgs[] = {8, 4, 2};
+        const int candidate_nsg_count = 3;
+        bool vendor_ok = false;
+        ggml_metal_pipeline_with_params pipeline = {};
 
-        // Vendor verification — fall back to mul_mv if unverified
-        bool vendor_ok = true;
-        if (pipeline.pipeline) {
+        for (int ci = 0; ci < candidate_nsg_count; ++ci) {
+            int candidate_nsg = candidate_nsgs[ci];
+            if (candidate_nsg > max_nsg) {
+                continue;
+            }
+            pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, candidate_nsg, nxpsg, r1ptg, use_shmem_reduce_ext);
+            if (!pipeline.pipeline) {
+                continue;
+            }
             const uint8_t verified = ggml_metal_pipeline_get_verified_vendors(pipeline.pipeline);
             const uint8_t vendor_bit = ggml_metal_vendor_to_verified_bit(profile->vendor);
-            if (!(verified & vendor_bit)) {
-                GGML_LOG_WARN("%s: mul_mv_ext NOT VERIFIED on vendor %d — falling back to mul_mv\n", __func__, profile->vendor);
-                vendor_ok = false;
+            if (verified & vendor_bit) {
+                nsg = candidate_nsg;
+                vendor_ok = true;
+                break;
+            }
+            if (candidate_nsg == 2) {
+                GGML_LOG_WARN("%s: mul_mv_ext NOT VERIFIED on vendor %d with nsg=%d — falling back\n", __func__, profile->vendor, candidate_nsg);
             }
         }
+
+        if (!vendor_ok) {
+            GGML_LOG_WARN("%s: mul_mv_ext also not verified on vendor %d with nsg=%d\n", __func__, profile->vendor, nsg);
+        }
+
+        const int ext_simd_w = use_shmem_reduce_ext
+            ? simd_w
+            : (pipeline.pipeline ? ggml_metal_pipeline_thread_execution_width(pipeline) : simd_w);
+        const int16_t nypsg  = ext_simd_w/nxpsg;  // num threads along col per simdgroup
+        const int16_t r0ptg  = nypsg*nsg;          // num src0 rows per threadgroup
 
         if (vendor_ok) {
             ggml_metal_kargs_mul_mv_ext args = {
@@ -226,7 +251,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
             ggml_metal_encoder_dispatch_threadgroups(enc, ext_grid_x, ext_grid_y, ext_grid_z, ext_simd_w, nsg, 1);
         }
-            dispatched = true;
+        dispatched = true;
         }
     }
 

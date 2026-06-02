@@ -25,20 +25,20 @@ struct KargsNorm {
 
 // CPU reference implementation (the oracle)
 void cpu_norm(const float* input, float* output, int ne00, float eps) {
-    // Compute mean
-    float sum = 0;
+    // Compute mean with double precision accumulation for numerical stability.
+    double sum = 0.0;
     for (int i = 0; i < ne00; i++) {
         sum += input[i];
     }
-    float mean = sum / ne00;
+    float mean = (float)(sum / ne00);
 
-    // Subtract mean and compute variance
-    float var_sum = 0;
+    // Subtract mean and compute variance with double precision accumulation.
+    double var_sum = 0.0;
     for (int i = 0; i < ne00; i++) {
         output[i] = input[i] - mean;
-        var_sum += output[i] * output[i];
+        var_sum += (double)output[i] * (double)output[i];
     }
-    float variance = var_sum / ne00;
+    float variance = (float)(var_sum / ne00);
 
     // Scale by 1/sqrt(variance + eps)
     float scale = 1.0f / sqrtf(variance + eps);

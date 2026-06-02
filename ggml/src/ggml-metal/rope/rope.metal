@@ -22,8 +22,9 @@ static void rope_yarn(
         // Get n-d magnitude scaling corrected for interpolation
         mscale *= 1.0f + 0.1f * log(1.0f / freq_scale);
     }
-    *cos_theta = cos(theta) * mscale;
-    *sin_theta = sin(theta) * mscale;
+    *sin_theta = sincos(theta, *cos_theta);
+    *cos_theta *= mscale;
+    *sin_theta *= mscale;
 }
 
 // Apparently solving `n_rot = 2pi * x * base^((2 * max_pos_emb) / n_dims)` for x, we get
